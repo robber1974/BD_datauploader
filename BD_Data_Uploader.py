@@ -1,6 +1,12 @@
-# BD_Data_Uploader_v0_93.py
+# BD_Data_Uploader_v0_94.py
 # Streamlit app to upload/update BlueDolphin objects + create relationships
 # This software is under an MIT License (see root of project)
+# v0.94:
+#   - Add option to store and re-use configuration settings.
+#   - Fixed matching by ID: now case insensitive; both for objects and relations.
+#   - Added support for Dutch lifecycle input.
+#   - Skip test existing when Label selected is (none).
+#   - Shows empty label text instead of "nan" value when excel cell is empty.
 # v0.93:
 #   - Relationships preview: keep the FIRST (from_id,to_id[,label]) and mark all later
 #     duplicates as "Skip: duplicate". First one still checks/obeys "Skip (exists)" and
@@ -20,9 +26,33 @@ import pandas as pd
 import requests
 import streamlit as st
 
-ALLOWED_LIFECYCLE = {"Current", "Future"}
+# Accepted input values (either English or Dutch). For API payload we use the canonical English values.
+ACCEPTABLE_LIFECYCLE_INPUT = {"Current", "Future", "Huidig", "Toekomst"}
+ALLOWED_LIFECYCLE = {"Current", "Future"}  # canonical values used when sending to API
 
-st.set_page_config(page_title="BlueDolphin Uploader v0.93", layout="wide")
+def _canonical_lifecycle(val: str) -> Optional[str]:
+    """Return canonical English lifecycle ('Current'|'Future') for an input value, or None if unknown/empty."""
+    if val is None: return None
+    v = str(val).strip()
+    if not v: return None
+    m = v.lower()
+    if m == "current": return "Current"
+    if m == "future": return "Future"
+    if m == "huidig": return "Current"
+    if m == "toekomst": return "Future"
+    return None
+
+def _lifecycle_lang(val: str) -> Optional[str]:
+    """Return 'en' or 'nl' depending on language of the provided value; None for empty/unknown."""
+    if val is None: return None
+    v = str(val).strip()
+    if not v: return None
+    m = v.lower()
+    if m in ("current", "future"): return "en"
+    if m in ("huidig", "toekomst"): return "nl"
+    return None
+
+st.set_page_config(page_title="BlueDolphin Uploader v0.94", layout="wide")
 st.title("BlueDolphin CSV/Excel Uploader")
 
 # ---------------- Sidebar: connection + mode ----------------
@@ -37,6 +67,10 @@ with st.sidebar:
     mode = st.radio("Mode", ["Objects", "Relationships"], index=0, horizontal=True)
 
     st.divider()
+
+# ---------------- Configuration (sidebar): Reset + Save + Load ----------------
+with st.sidebar.expander("Configuration", expanded=False):
+    # Reset the current configuration
     if st.button("Reset configuration (keep tenant & key)"):
         keep = {"debug_mode","log_show_ok"}
         for k in list(st.session_state.keys()):
@@ -52,6 +86,90 @@ with st.sidebar:
         st.session_state["obj_upload_session"] = st.session_state.get("obj_upload_session", 0) + 1
         st.session_state["rel_upload_session"] = st.session_state.get("rel_upload_session", 0) + 1
         st.rerun()
+
+    # Save configuration: create a local JSON file and offer to download it client-side
+    if st.button("Save configuration (without key)"):
+        # Build a snapshot of session_state excluding secrets and ephemeral UI/server objects
+        exclude_prefixes = ("preview_")
+        exclude_keys = {
+            "api_key"
+        }
+
+        cfg = {}
+        for k, v in st.session_state.items():
+            if k in exclude_keys:
+                continue
+            if any(k.startswith(p) for p in exclude_prefixes):
+                continue
+            # Only include simple serializable types (fallback to str for others)
+            try:
+                json.dumps(v)
+                cfg[k] = v
+            except Exception:
+                cfg[k] = str(v)
+
+        cfg_json = json.dumps(cfg, indent=2, ensure_ascii=False)
+
+        # Provide the JSON as a downloadable file (client-side download, no server save)
+        date_str = datetime.date.today().strftime("%Y-%m-%d")
+        download_name = f"bdu_config_{date_str}.json"
+        st.download_button(
+            label="Download configuration JSON",
+            data=cfg_json,
+            file_name=download_name,
+            mime="application/json"
+        )
+
+    # Load configuration: select a local JSON file and apply into st.session_state
+    cfg_file = st.file_uploader("Load configuration JSON (without key)", type=["json"], key="cfg_loader")
+    if cfg_file:
+        try:
+            raw = cfg_file.read()
+            try:
+                text = raw.decode("utf-8")
+            except Exception:
+                text = raw.decode("latin-1")
+            cfg = json.loads(text)
+            if not isinstance(cfg, dict):
+                st.error("Configuration file must contain a JSON object (key/value map)."); cfg = None
+        except Exception as e:
+            st.error(f"Failed to read configuration file: {e}"); cfg = None
+
+        if cfg is not None:
+            include_secrets = st.checkbox("Also restore API key (sensitive)", value=False, key="cfg_include_secrets")
+            if st.button("Apply loaded configuration", key="cfg_apply_btn"):
+                # Keys/prefixes we never restore by default
+                exclude_prefixes = ("preview_", "obj_uploader", "rel_uploader")
+                exclude_keys = {
+                    "log_entries", "log_placeholder", "cfg_loader", "rate_box",
+                    "cfg_apply_btn", "cfg_include_secrets",
+                    "obj_apply_btn", "rel_apply_btn", "obj_preview_btn", "rel_preview_btn",
+                    "obj_upload_session", "rel_upload_session"
+                }
+
+                applied = 0
+                skipped = 0
+                for k, v in cfg.items():
+                    if k in ("tenant", "api_key") and not include_secrets:
+                        skipped += 1; continue
+                    if k in exclude_keys:
+                        skipped += 1; continue
+                    if any(k.startswith(p) for p in exclude_prefixes):
+                        skipped += 1; continue
+                    # Apply value (simple assignment)
+                    st.session_state[k] = v
+                    applied += 1
+
+                st.success(f"Applied {applied} keys, skipped {skipped} keys.")
+
+                # Clear any preview-state that might have been present in the loaded config so the
+                # app waits for the user to press "Generate preview" before enabling "Apply now".
+                for _k in ("preview_df", "preview_mask_change", "preview_mask_invalid", "preview_meta",
+                           "confirm_apply_invalid"):
+                    st.session_state.pop(_k, None)
+                # Ensure UI returns to the mapping step (step 4) after rerun and shows the Generate preview button.
+                st.session_state["obj_current_step"] = 4
+                # st.rerun()
 
 # --- state init ---
 for k, v in [
@@ -476,6 +594,7 @@ def objects_flow():
 
     # ---------------- Step 3 (mapping) ----------------
     st.header("3) Mapping")
+
     with st.spinner("Loading questionnaires & properties…"):
         definition = get_object_definition(object_def_id)
 
@@ -615,6 +734,12 @@ def objects_flow():
 
     # ---------------- Step 4 (preview) ----------------
     st.header("4) Preview")
+    # If a loaded configuration requested to return to mapping, show a short notice
+    if st.session_state.get("obj_current_step") == 4:
+        st.info("Configuration applied. Review mapping and press **Generate preview** to build the preview.")
+        # Clear the flag so the notice only shows once after rerun
+        st.session_state.pop("obj_current_step", None)
+
     preview_clicked = st.button("Generate preview", key="obj_preview_btn")
     if preview_clicked:
         with st.spinner("Retrieving existing objects…"):
@@ -622,6 +747,8 @@ def objects_flow():
 
         by_id = {o["id"]: o for o in existing if "id" in o}
         by_title = {str((o.get("object_title") or o.get("title"))): o for o in existing if (o.get("object_title") or o.get("title"))}
+        # Build a lower-case lookup to allow case-insensitive matching of IDs later
+        lower_by_id = {str(k).lower(): k for k in by_id.keys()}
 
         def get_detail(stub):
             try: return get_object(stub["id"])
@@ -684,8 +811,11 @@ def objects_flow():
         for _, r in df.iterrows():
             title_target = str(r.get(title_col, "")).strip()
             if not title_target: continue
-            obj_id_val = "" if object_id_col=="(none)" else str(r.get(object_id_col, "")).strip()
-            life_raw = "" if lifecycle_col=="(none)" else str(r.get(lifecycle_col, "") or "").strip()
+            obj_id_val = "" if object_id_col == "(none)" else str(r.get(object_id_col, "")).strip()
+            life_raw = "" if lifecycle_col == "(none)" else (str(r.get(lifecycle_col, "") or "").strip())
+            # Derive canonical English value (for comparison / payload) and detected language
+            life_canon = _canonical_lifecycle(life_raw)
+            life_lang = _lifecycle_lang(life_raw)
 
             target_props: Dict[str, str] = {pname: ("" if pd.isna(r.get(csvc,"")) else str(r.get(csvc,"")))
                                             for pname, csvc in prop_map.items()}
@@ -694,7 +824,34 @@ def objects_flow():
                 val = "" if pd.isna(r.get(csvc,"")) else str(r.get(csvc,""))
                 target_boem.setdefault(qid, {})[fid] = val
 
-            stub = by_id.get(obj_id_val) if obj_id_val else by_title.get(title_target)
+            # Resolve by ID if provided; if ID not found, attempt to fall back to Title.
+            # Track unresolved/mismatched ID so we can mark it in the preview.
+            had_id = bool(obj_id_val)
+            # case-insensitive ID lookup
+            id_found = False
+            if had_id:
+                id_found = str(obj_id_val).lower() in lower_by_id
+            title_found = (title_target in by_title) and (by_title.get(title_target) is not None)
+
+            id_unresolved = False
+            stub = None
+            if had_id:
+                if id_found:
+                    # resolve real key case-insensitively
+                    real_key = lower_by_id.get(str(obj_id_val).lower())
+                    stub = by_id.get(real_key)
+                else:
+                    # ID was provided but not found — try title fallback
+                    if title_found:
+                        stub = by_title.get(title_target)
+                        # mark that the provided ID did not resolve but we used the title match
+                        id_unresolved = True
+                    else:
+                        # ID provided but not found and title not found => no match
+                        stub = None
+                        id_unresolved = True
+            else:
+                stub = by_title.get(title_target)
 
             # Build duplicate key only when both IDs are known (after resolving)
             curr_id = ""
@@ -711,15 +868,17 @@ def objects_flow():
                 curr_life = str(detail.get("object_lifecycle_state","") or "")
 
                 row = {"Action":"Update","Object_Title":title_target,"Id":detail["id"],"Lifecycle":life_raw}
+                # mark Id invalid if the CSV supplied an ID that didn't resolve
                 mask_change = {"Action":False,"Object_Title":(title_target!=curr_title),"Id":False,"Lifecycle":False}
-                mask_invalid = {"Action":False,"Object_Title":False,"Id":False,"Lifecycle":False}
+                mask_invalid = {"Action":False,"Object_Title":False,"Id":bool(id_unresolved),"Lifecycle":False}
                 any_change = (title_target!=curr_title)
 
                 if life_raw != "":
-                    if life_raw not in ALLOWED_LIFECYCLE:
+                    # Accept both Dutch and English inputs; determine canonical English value.
+                    if life_canon is None:
                         mask_invalid["Lifecycle"] = True
                     else:
-                        chg_life = (life_raw != curr_life)
+                        chg_life = (life_canon != curr_life)
                         mask_change["Lifecycle"] = chg_life
                         any_change |= chg_life
 
@@ -755,20 +914,25 @@ def objects_flow():
                     prop_updates = {pname: target_props[pname]
                                     for pname in prop_map.keys()
                                     if str(target_props[pname]) != str(curr_props.get(pname, ""))}
-                    lifecycle_update = life_raw if (life_raw in ALLOWED_LIFECYCLE and life_raw != curr_life) else None
+                    lifecycle_update = life_canon if (life_canon is not None and life_canon != curr_life) else None
                     meta.append({
                         "new": False, "id": detail["id"],
+                        "original_id_provided": obj_id_val if had_id else None,
+                        "id_mismatch": bool(id_unresolved),
                         "title_update": title_target if (title_target!=curr_title) else None,
                         "title": title_target,
                         "boem_updates": boem_updates,
                         "prop_updates": prop_updates,
-                        "lifecycle_update": lifecycle_update
+                        "lifecycle_update": lifecycle_update,
+                        "lifecycle_raw": (life_raw or None),
+                        "lifecycle_lang": life_lang
                     })
             else:
                 # --- Create path (same as before) ---
                 row={"Action":"Create","Object_Title":title_target,"Id":"","Lifecycle":life_raw}
+                # If the CSV supplied an ID that couldn't be found, mark Id invalid so user can see mismatch.
                 mask_change={"Action":False,"Object_Title":True,"Id":False,"Lifecycle": (life_raw != "" and life_raw in ALLOWED_LIFECYCLE)}
-                mask_invalid={"Action":False,"Object_Title":False,"Id":False,"Lifecycle": (life_raw != "" and life_raw not in ALLOWED_LIFECYCLE)}
+                mask_invalid={"Action":False,"Object_Title":False,"Id":bool(id_unresolved),"Lifecycle": (life_raw != "" and life_raw not in ALLOWED_LIFECYCLE)}
                 for pname in prop_map.keys():
                     key=f"objectproperty_{pname}"
                     v = target_props.get(pname, "")
@@ -779,8 +943,15 @@ def objects_flow():
                     row[key]=v; mask_change[key]=True
                     mask_invalid[key]= (v!="" and not _validate_value(qid,fid,v))
                 rows.append(row); change_rows.append(mask_change); invalid_rows.append(mask_invalid)
-                lifecycle_val = life_raw if life_raw in ALLOWED_LIFECYCLE else None
-                meta.append({"new": True,"id":"","title":title_target,"boem":target_boem,"props":target_props,"lifecycle": lifecycle_val})
+                lifecycle_val = life_canon if life_canon is not None else None
+                meta.append({
+                    "new": True, "id": "", "title": title_target, "boem": target_boem, "props": target_props,
+                    "lifecycle": lifecycle_val,
+                    "original_id_provided": obj_id_val if had_id else None,
+                    "id_mismatch": bool(id_unresolved),
+                    "lifecycle_raw": (life_raw or None),
+                    "lifecycle_lang": life_lang
+                })
 
         if not rows:
             st.info("Nothing to create or update based on current mapping.")
@@ -799,7 +970,17 @@ def objects_flow():
             GREEN_BG, GREEN_FG = "#b6f3b6", "#064b2d"
 
             def style_cell(val, col, idx):
-                if col in ("Action","Id"): return ""
+                if col in ("Action"): return ""
+                # Only suppress styling for the Id column when the user did NOT map an Object ID column.
+                if col == "Id":
+                    if object_id_col == "(none)":
+                        return ""
+                    # For Id column: only show invalid (red). Don't show green/blue for OK/changed.
+                    inv_id = bool(invalid_df.loc[idx, col]) if col in invalid_df.columns else False
+                    if inv_id:
+                        bg, fg = RED_BG, RED_FG
+                        return f"background-color:{bg}; color:{fg}; font-weight:600;"
+                    return ""
                 inv = bool(invalid_df.loc[idx, col]) if col in invalid_df.columns else False
                 chg = bool(change_df.loc[idx, col]) if col in change_df.columns else False
                 if inv:   bg, fg = RED_BG, RED_FG
@@ -935,36 +1116,80 @@ def _get_relation_cached(rel_id: str) -> dict:
         _rel_detail_cache[rel_id] = get_relation(rel_id)
     return _rel_detail_cache[rel_id]
 
-def relation_exists_exact(template_id: str, from_id: str, to_id: str, label: str) -> bool:
+def relation_exists_exact(template_id: str, from_id: str, to_id: str, label: Optional[str]) -> bool:
+    """
+    Check whether a relation with given template/from/to exists.
+    If label is None, LABEL is ignored (match only template/from/to).
+    If label is provided (including empty string), the label must match exactly.
+    Comparison of IDs is done case-insensitively.
+    """
     if not (template_id and from_id and to_id):
         return False
+
+    # normalize for comparisons
+    tpl_norm = str(template_id).strip()
+    from_norm = str(from_id).strip()
+    to_norm = str(to_id).strip()
+    tpl_norm_l = tpl_norm.lower()
+    from_norm_l = from_norm.lower()
+    to_norm_l = to_norm.lower()
+
+    label_is_none = (label is None)
+    label_norm = "" if label is None else str(label)
+
     try:
+        # Try to fetch the source object as provided (may fail if casing mismatch)
         src = _get_object_cached(from_id)
     except Exception:
-        return False
+        # If fetching by provided id fails, try a best-effort: attempt to find an object
+        # in the local cache whose id matches case-insensitively (if available).
+        # If none found, give up and return False.
+        found = None
+        for obj in _obj_rel_cache.values():
+            try:
+                oid = str(obj.get("id", "")).strip()
+                if oid and oid.lower() == from_norm_l:
+                    found = obj
+                    break
+            except Exception:
+                continue
+        if not found:
+            return False
+        src = found
 
     rels = src.get("related_objects", []) or []
     for r in rels:
         try:
-            if str(r.get("object_id") or "") != str(to_id):
+            obj_id = str(r.get("object_id") or "").strip()
+            if not obj_id or obj_id.lower() != to_norm_l:
                 continue
+
             tpl = str(
                 (r.get("relationship") or {}).get("template_id")
                 or (r.get("type") or {}).get("id")
                 or ""
-            )
-            if tpl != str(template_id):
+            ).strip()
+            if tpl.lower() != tpl_norm_l:
                 continue
+
             rid = r.get("relationship_id")
             if not rid:
                 continue
             det = _get_relation_cached(str(rid))
-            if str(det.get("source_id") or "") != str(from_id):
+
+            src_id = str(det.get("source_id") or "").strip()
+            tgt_id = str(det.get("target_id") or "").strip()
+            if src_id.lower() != from_norm_l:
                 continue
-            if str(det.get("target_id") or "") != str(to_id):
+            if tgt_id.lower() != to_norm_l:
                 continue
+
+            # If caller passed label=None -> ignore label and consider this a match.
+            if label_is_none:
+                return True
+
             existing_label = str(det.get("remark") or det.get("label") or "")
-            if existing_label == (label or ""):
+            if existing_label == label_norm:
                 return True
         except Exception:
             continue
@@ -998,7 +1223,156 @@ def relationships_flow():
         to_def_id = def_map[to_name]
 
     st.info("The API does not expose relationship definitions. Enter the **Relationship Template ID** manually.")
-    tpl_id = st.text_input("Relationship Template ID", key="rel_tpl_manual", placeholder="e.g. 5a00543aec9d264840ae0619").strip()
+
+    # Allow user to choose source: manual entry or JSON config (with dropdown).
+    src = st.radio("Template ID source", ["Manual entry", "Use JSON config (dropdown)"], index=0, horizontal=True, key="rel_tpl_source")
+
+    def _parse_rel_tpl_config(cfg):
+        mapping = {}
+        if isinstance(cfg, dict):
+            for k, v in cfg.items():
+                if isinstance(v, str):
+                    mapping[str(k)] = v
+                elif isinstance(v, dict):
+                    vid = v.get("id") or v.get("template_id") or v.get("value") or v.get("templateId")
+                    if vid:
+                        mapping[str(k)] = vid
+        elif isinstance(cfg, list):
+            for item in cfg:
+                if not isinstance(item, dict):
+                    continue
+                name = item.get("name") or item.get("label") or item.get("title") or item.get("template_name")
+                vid = item.get("id") or item.get("template_id") or item.get("value") or item.get("templateId")
+                if name and vid:
+                    mapping[str(name)] = vid
+        return mapping
+
+    tpl_id = st.session_state.get("rel_tpl_manual", "") or ""
+
+    if src == "Manual entry":
+        # Manual input only
+        # If the user previously selected a template in the JSON dropdown, make sure that selected
+        # template ID is reflected in the manual input when switching back to Manual entry.
+        prev_sel = st.session_state.get("rel_tpl_select", "(none)")
+        rel_map = st.session_state.get("rel_tpl_map", {}) or {}
+        if prev_sel and prev_sel != "(none)":
+            # ensure the canonical manual session key contains the selected template id
+            st.session_state["rel_tpl_manual"] = rel_map.get(prev_sel, st.session_state.get("rel_tpl_manual", ""))
+
+        tpl_id = st.text_input("Relationship Template ID", key="rel_tpl_manual", placeholder="e.g. 5a00543aec9d264840ae0619")
+        # keep any previously loaded config but do not show dropdown
+        if st.session_state.get("rel_tpl_config") and st.button("Preview loaded templates", key="rel_tpl_preview_btn"):
+            cfg_preview = st.session_state.get("rel_tpl_config")
+            try:
+                def _tpl_preview_rows(cfg):
+                    rows = []
+                    if isinstance(cfg, dict):
+                        for k, v in cfg.items():
+                            if isinstance(v, (str, int, float)):
+                                rows.append({"name": str(k), "template_id": str(v)})
+                            elif isinstance(v, dict):
+                                vid = v.get("id") or v.get("template_id") or v.get("value") or v.get("templateId")
+                                rows.append({
+                                    "name": str(k),
+                                    "template_id": str(vid) if vid is not None else "",
+                                    "raw": json.dumps(v, ensure_ascii=False)
+                                })
+                            else:
+                                rows.append({"name": str(k), "template_id": str(v)})
+                    elif isinstance(cfg, list):
+                        for item in cfg:
+                            if not isinstance(item, dict):
+                                rows.append({"name": "", "template_id": str(item)})
+                                continue
+                            name = item.get("name") or item.get("label") or item.get("title") or item.get("template_name") or ""
+                            vid = item.get("id") or item.get("template_id") or item.get("value") or item.get("templateId") or ""
+                            rows.append({
+                                "name": str(name),
+                                "template_id": str(vid),
+                                "raw": json.dumps(item, ensure_ascii=False)
+                            })
+                    else:
+                        rows.append({"name": "", "template_id": str(cfg)})
+                    return rows
+
+                rows = _tpl_preview_rows(cfg_preview)
+                if rows:
+                    df_preview = pd.DataFrame(rows)
+                    st.info(f"Templates in loaded config: **{len(df_preview)}**.")
+                    st.dataframe(df_preview, use_container_width=True)
+                    # with st.expander("Show raw loaded JSON", expanded=False):
+                    #     st.json(cfg_preview)
+                else:
+                    st.info("No templates found in loaded config.")
+            except Exception:
+                st.info("Loaded config could not be parsed as templates.")
+    else:
+        # Use JSON config path: file uploader + dropdown
+        c1, c2 = st.columns([3, 1])
+        with c1:
+            rel_tpl_file = st.file_uploader("Upload templates (JSON)", type=["json"], key="rel_tpl_config_loader")
+            # allow previously loaded config to remain if user doesn't upload again
+            if rel_tpl_file:
+                try:
+                    cfg = json.load(rel_tpl_file)
+                    st.session_state["rel_tpl_config"] = cfg
+                    st.success("Loaded relationship templates configuration")
+                    if isinstance(cfg, dict):
+                        st.caption(f"{len(cfg)} templates loaded")
+                except Exception as e:
+                    st.error(f"Invalid JSON: {e}")
+        # Build dropdown from session-stored config (if present)
+        cfg_loaded = st.session_state.get("rel_tpl_config")
+        if cfg_loaded:
+            tpl_map = _parse_rel_tpl_config(cfg_loaded) or {}
+            # persist the map in session for use by callbacks / post-select logic
+            st.session_state["rel_tpl_map"] = tpl_map
+            if tpl_map:
+                opts = ["(none)"] + sorted(tpl_map.keys())
+
+                # Determine which option should be selected by default:
+                # priority: previously stored rel_tpl_select (if still valid) ->
+                #            current rel_tpl_manual matches a value in tpl_map ->
+                #            fallback "(none)"
+                prev_select = st.session_state.get("rel_tpl_select")
+                default_key = "(none)"
+                if prev_select in opts:
+                    default_key = prev_select
+                else:
+                    current_manual = str(st.session_state.get("rel_tpl_manual", "") or "").strip()
+                    if current_manual:
+                        # find the label that maps to this id
+                        for label, vid in tpl_map.items():
+                            if str(vid).strip() == current_manual:
+                                default_key = label
+                                break
+
+                # Show the selectbox. Use the stored key so Streamlit persists the selection.
+                try:
+                    sel_index = opts.index(default_key)
+                except Exception:
+                    sel_index = 0
+
+                st.selectbox("Choose template", opts, index=sel_index, key="rel_tpl_select")
+                # Immediately reflect the selection into the manual tpl input so downstream code
+                # reads a single canonical session key ("rel_tpl_manual").
+                sel = st.session_state.get("rel_tpl_select", "(none)")
+                rel_map = st.session_state.get("rel_tpl_map", {}) or {}
+                if sel and sel != "(none)":
+                    st.session_state["rel_tpl_manual"] = rel_map.get(sel, "")
+                else:
+                    # If user explicitly chose "(none)", clear the manual entry
+                    # but keep any previously typed manual input if the selection wasn't "(none)".
+                    if sel == "(none)":
+                        st.session_state["rel_tpl_manual"] = st.session_state.get("rel_tpl_manual", "")
+                # set tpl_id from the canonical session key
+                tpl_id = st.session_state.get("rel_tpl_manual", "") or ""
+            else:
+                st.caption("No templates found in uploaded JSON.")
+                tpl_id = ""
+        else:
+            st.info("Upload a JSON file describing templates, or switch to Manual entry.")
+            tpl_id = ""
 
     st.header("R2) Upload & map CSV / Excel")
     file = st.file_uploader("Choose file", type=["csv", "xlsx", "xls", "xlsm"], key=f"rel_uploader_{st.session_state.rel_upload_session}")
@@ -1044,6 +1418,7 @@ def relationships_flow():
         label_col = st.selectbox("Label (remark) column (optional)", cols, index=0, key="rel_label_col")
     with l2:
         lifecycle_col_rel = st.selectbox("Lifecycle column (optional)", cols, index=0, key="rel_lifecycle_col")
+
     st.caption("Lifecycle accepted values: **Current** / **Future**")
 
     st.header("R3) Preview")
@@ -1068,8 +1443,13 @@ def relationships_flow():
             t_id = "" if to_id_col == "(none)" else str(r.get(to_id_col) or "").strip()
             f_title = "" if from_title_col == "(none)" else str(r.get(from_title_col) or "").strip()
             t_title = "" if to_title_col == "(none)" else str(r.get(to_title_col) or "").strip()
-            lbl = "" if label_col == "(none)" else str(r.get(label_col) or "").strip()
             life = "" if lifecycle_col_rel == "(none)" else str(r.get(lifecycle_col_rel) or "").strip()
+            # Use pd.isna to avoid turning pandas NaN into the string "nan"
+            if label_col == "(none)":
+                lbl = ""
+            else:
+                val = r.get(label_col)
+                lbl = "" if pd.isna(val) else str(val).strip()
 
             if not f_id and f_title:
                 df_from = fetch_objects_df(workspace_id, from_def_id)
@@ -1102,11 +1482,14 @@ def relationships_flow():
             exists = False
             if not missing_ft and not errs and not is_dup_later:
                 try:
+                    # Determine label argument based on whether a Label column was mapped.
+                    # If no label column is mapped, pass None so relation_exists_exact ignores the label.
+                    label_arg = None if label_col == "(none)" else (lbl or "").strip()
                     exists = relation_exists_exact(
                         template_id=str(tpl_id).strip(),
                         from_id=str(f_id).strip(),
                         to_id=str(t_id).strip(),
-                        label=(lbl or "").strip()
+                        label=label_arg
                     )
                 except Exception:
                     exists = False
@@ -1212,4 +1595,3 @@ else:
         objects_flow()
     else:
         relationships_flow()
-

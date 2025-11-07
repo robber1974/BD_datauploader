@@ -1,0 +1,13 @@
+{
+  "Aggregatierelatie": "5a0053d6ec9d264840adfdfb",
+  "Associatierelatie": "652f9b5ad750abc330cf2591",
+  "Beinvloedt relatie": "59cbaf3882932751d81da04e",
+  "Compositierelatie": "5a00543aec9d264840ae0619",
+  "Flow-relatie": "5333e8938ccee096c838fe92",
+  "Gebruiksrelatie": "5333e9d68ccee096c838fe93",
+  "Realisatierelatie": "5a00547fec9d264840ae0aee",
+  "Specialisatierelatie": "5ccc4308bdcfea650965a30e",
+  "Toegangsrelatie": "5388b8c80bc7c605dc851880",
+  "Toekenningsrelatie": "5a0053f1ec9d264840ae0144",
+  "Triggering relatie": "5ab0f47cec9d2620d4f14b6a"
+}
