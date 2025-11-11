@@ -1,6 +1,9 @@
-# BD_Data_Uploader_v0_94.py
+# BD_Data_Uploader_v0_95.py
 # Streamlit app to upload/update BlueDolphin objects + create relationships
 # This software is under an MIT License (see root of project)
+# v0.95:
+#    - Help update: Added link to https://bluedolphin-key-buddy.lovable.app/ for easy user api key creation
+#    - Help update: some additional changes for more clarity.
 # v0.94:
 #   - Add option to store and re-use configuration settings.
 #   - Fixed matching by ID: now case insensitive; both for objects and relations.
@@ -1613,4 +1616,5 @@ else:
         objects_flow()
     else:
         relationships_flow()
+
 
