@@ -191,9 +191,27 @@ def render_help():
         st.markdown(
             """
 **API key & tenant**
-- Use a **User API key** (inherits your permissions). Treat it like a password.
-- Where do I get it? See the **Quick Start Guide** (steps to create a user API key).
-- **Tenant** = the part after **bluedolphin.app/**. Example: https://bluedolphin.app/mytenant → tenant = **mytenant**.
+- Create or use a **User API key** (inherits your permissions). Treat it like a password. Use either the link below or e.g. postman to create this.
+
+        )
+        st.link_button(
+            "BlueDolphin User Key Buddy",
+            "https://bluedolphin-key-buddy.lovable.app/",
+        )
+
+- The **Quick Start Guide** gives all the information about how to create the user API key.
+
+        )
+        st.link_button(
+            "Open Quick Start Guide",
+            "https://support.valueblue.nl/hc/en-us/articles/13296899552668-Quick-Start-Guide",
+        )
+The quick summary of the quick start
+    - Key Management API Key = the key created in BlueDolphin of type "user key management" to create user API keys.
+    - The tenantname = the part after **bluedolphin.app/**. Example: https://bluedolphin.app/mytenant → tenant = **mytenant**.
+    - Userid = the Id of the user you want to create an API key for. Select the user in admin\users and copy the Id from the url.
+    - Key Name = The name you want to give the give. Only used for recognition (e.g. streamlit key for userX)
+    - Expiration Date = The date the user API key expires. Treat this key as a password! Change it regularly!
 
 **Objects — how it works**
 - **Title** is required and must be **unique in your file**.
@@ -1595,3 +1613,4 @@ else:
         objects_flow()
     else:
         relationships_flow()
+
