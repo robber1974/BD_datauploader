@@ -55,7 +55,7 @@ def _lifecycle_lang(val: str) -> Optional[str]:
     if m in ("huidig", "toekomst"): return "nl"
     return None
 
-st.set_page_config(page_title="BlueDolphin Uploader v0.94", layout="wide")
+st.set_page_config(page_title="BlueDolphin Uploader v0.95", layout="wide")
 st.title("BlueDolphin CSV/Excel Uploader")
 
 # ---------------- Sidebar: connection + mode ----------------
@@ -192,29 +192,35 @@ for k, v in [
 def render_help():
     with st.sidebar.expander("Help: API key, tenant & rules", expanded=False):
         st.markdown(
-            """
+            r"""
 **API key & tenant**
-- Create or use a **User API key** (inherits your permissions). Treat it like a password. Use either the link below or e.g. postman to create this.
-
+- Create or use a **User API key** (inherits your permissions). Treat it like a password.
+- You can use either the **BlueDolphin User Key Buddy** or another tool (e.g. Postman) to create one.
+- The **Quick Start Guide** explains the process in detail, but the quick summary below is usually all you need.
+"""
         )
+
         st.link_button(
             "BlueDolphin User Key Buddy",
             "https://bluedolphin-key-buddy.lovable.app/",
-        )
-
-- The **Quick Start Guide** gives all the information about how to create the user API key.
-
         )
         st.link_button(
             "Open Quick Start Guide",
             "https://support.valueblue.nl/hc/en-us/articles/13296899552668-Quick-Start-Guide",
         )
-The quick summary of the quick start
-    - Key Management API Key = the key created in BlueDolphin of type "user key management" to create user API keys.
-    - The tenantname = the part after **bluedolphin.app/**. Example: https://bluedolphin.app/mytenant → tenant = **mytenant**.
-    - Userid = the Id of the user you want to create an API key for. Select the user in admin\\users and copy the Id from the url.
-    - Key Name = The name you want to give the give. Only used for recognition (e.g. streamlit key for userX)
-    - Expiration Date = The date the user API key expires. Treat this key as a password! Change it regularly!
+
+        st.markdown(
+            r"""
+**Quick summary - The needed information from the quick start guide to create your key**
+- **Key Management API Key** = the key created in BlueDolphin of type *user key management* to create user API keys.
+- **Tenant name** = the part after **bluedolphin.app/**.  
+  Example: `https://bluedolphin.app/mytenant` → tenant = **mytenant**.
+- **User ID** = the Id of the user you want to create an API key for.  
+  Select the user in `admin\\users` and copy the Id from the URL.
+- **Key Name** = any name for recognition (e.g. “streamlit key for userX”).
+- **Expiration Date** = when the user API key expires. Treat this key as a password and rotate it regularly.
+
+---
 
 **Objects — how it works**
 - **Title** is required and must be **unique in your file**.
@@ -232,22 +238,19 @@ The quick summary of the quick start
 - **Large uploads**: if the preview shows **>100** objects, applying can take longer.
 - **Rate limits**: if we need to slow down, the app shows a countdown and retries automatically.
 
+---
+
 **Relationships — how it works**
 - **Relationship template ID**: enter the ID manually (the API doesn’t list them).
 - **From / To**: pick the definitions and map IDs or Titles.
-- **Existing check**: we **skip** creating a relation if one already exists with the same **from**, **to**, **relationship type**, **direction**, and **label**.
+- **Existing check**: skips creation if a relation already exists with the same **from**, **to**, **relationship type**, **direction**, and **label**.
 - **Label**: optional free text attached to the relation.
 - **Lifecycle** (optional): Current or Future.
-- After apply, links to the **Relations** tab of each “from” object are shown.
+- After applying, links to the **Relations** tab of each “from” object are shown.
 """
         )
-        st.link_button(
-            "Open Quick Start Guide",
-            "https://support.valueblue.nl/hc/en-us/articles/13296899552668-Quick-Start-Guide",
-        )
-
+# shows help section
 render_help()
-
 # ---------------- Advanced (sidebar): logging + cache ----------------
 with st.sidebar.expander("Advanced", expanded=False):
     st.session_state.debug_mode = st.checkbox("Enable logging", value=st.session_state.debug_mode)
@@ -1616,6 +1619,7 @@ else:
         objects_flow()
     else:
         relationships_flow()
+
 
 
 
