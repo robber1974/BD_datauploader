@@ -212,7 +212,7 @@ def render_help():
 The quick summary of the quick start
     - Key Management API Key = the key created in BlueDolphin of type "user key management" to create user API keys.
     - The tenantname = the part after **bluedolphin.app/**. Example: https://bluedolphin.app/mytenant → tenant = **mytenant**.
-    - Userid = the Id of the user you want to create an API key for. Select the user in admin\users and copy the Id from the url.
+    - Userid = the Id of the user you want to create an API key for. Select the user in admin\\users and copy the Id from the url.
     - Key Name = The name you want to give the give. Only used for recognition (e.g. streamlit key for userX)
     - Expiration Date = The date the user API key expires. Treat this key as a password! Change it regularly!
 
@@ -1616,5 +1616,6 @@ else:
         objects_flow()
     else:
         relationships_flow()
+
 
 
